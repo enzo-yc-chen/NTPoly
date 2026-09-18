@@ -1,7 +1,7 @@
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 !> A Module For Performing Distributed Sparse Matrix Algebra Operations.
 MODULE PSMatrixAlgebraModule
-  USE DataTypesModule, ONLY : NTREAL, MPINTREAL, NTCOMPLEX, MPINTCOMPLEX
+  USE DataTypesModule, ONLY : NTREAL, NTLONG, MPINTREAL, NTCOMPLEX, MPINTCOMPLEX
   USE GemmTasksModule
   USE MatrixReduceModule, ONLY : ReduceHelper_t, ReduceAndComposeMatrixSizes, &
        & ReduceAndComposeMatrixData, ReduceAndComposeMatrixCleanup, &
@@ -14,7 +14,9 @@ MODULE PSMatrixAlgebraModule
   USE PSMatrixModule, ONLY : Matrix_ps, ConstructEmptyMatrix, CopyMatrix, &
        & DestructMatrix, ConvertMatrixToComplex, ConjugateMatrix, &
        & MergeMatrixLocalBlocks, IsIdentity, TransposeMatrix, &
-       & SplitMatrixToLocalBlocks
+       & SplitMatrixToLocalBlocks, GetMatrixSize, GetMatrixActualDimension
+  USE ObservabilityModule, ONLY : BeginObservedMatrixMultiply, &
+       & EndObservedMatrixMultiply, ObservabilityEnabled
   USE SMatrixAlgebraModule, ONLY : MatrixMultiply, MatrixGrandSum, &
        & PairwiseMultiplyMatrix, IncrementMatrix, ScaleMatrix, &
        & MatrixColumnNorm, MatrixDiagonalScale
@@ -128,6 +130,8 @@ CONTAINS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     REAL(NTREAL) :: beta
     REAL(NTREAL) :: threshold
     TYPE(MatrixMemoryPool_p) :: memory_pool
+    INTEGER(NTLONG) :: observable_a_nnz, observable_b_nnz
+    LOGICAL :: observe_multiply
 
     !! Handle the optional parameters
     IF (.NOT. PRESENT(alpha_in)) THEN
@@ -144,6 +148,15 @@ CONTAINS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        threshold = 0.0_NTREAL
     ELSE
        threshold = threshold_in
+    END IF
+
+    observe_multiply = ObservabilityEnabled()
+    IF (observe_multiply) THEN
+       observable_a_nnz = GetMatrixSize(matA)
+       observable_b_nnz = GetMatrixSize(matB)
+       CALL BeginObservedMatrixMultiply(matA%process_grid%global_comm, &
+            & matA%process_grid%global_rank, GetMatrixActualDimension(matA), &
+            & observable_a_nnz, observable_b_nnz, threshold)
     END IF
 
     !! Setup Memory Pool
@@ -207,6 +220,7 @@ CONTAINS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     CALL DestructMatrixMemoryPool(memory_pool)
     CALL DestructMatrix(matAConverted)
     CALL DestructMatrix(matBConverted)
+    IF (observe_multiply) CALL EndObservedMatrixMultiply(GetMatrixSize(matC))
 
   END SUBROUTINE MatrixMultiply_ps
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!

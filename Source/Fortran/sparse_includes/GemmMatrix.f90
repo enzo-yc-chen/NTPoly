@@ -56,6 +56,10 @@
   END IF
 
   !! Decide whether to do dense or sparse version.
+  CALL RecordLocalGemm(matA%rows, matA%columns, SIZE(matA%values), &
+       & matB%rows, matB%columns, SIZE(matB%values), mat_c_rows, &
+       & mat_c_columns, MIN(sparsity_a, sparsity_b) .GT. sparsity_threshold, &
+       & STORAGE_SIZE(matA%values)/8)
   IF (MIN(sparsity_a, sparsity_b) .GT. sparsity_threshold) THEN
      CALL DenseBranch(matA, matB, matAB, IsATransposed, IsBTransposed, &
           & alpha, threshold)

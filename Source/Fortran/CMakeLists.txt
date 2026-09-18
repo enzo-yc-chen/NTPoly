@@ -26,6 +26,7 @@ set(Fsrc
     MatrixMemoryPoolModule.F90
     MatrixReduceModule.F90
     NTMPIModule.F90
+    ObservabilityModule.F90
     PermutationModule.F90
     PMatrixMemoryPoolModule.F90
     PolynomialSolversModule.F90
@@ -75,4 +76,3 @@ install(EXPORT ntpoly-export FILE NTPolyConfig.cmake
 configure_file(NTPoly.pc.in NTPoly.pc @ONLY)
 install(FILES ${CMAKE_BINARY_DIR}/Source/Fortran/NTPoly.pc 
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
-

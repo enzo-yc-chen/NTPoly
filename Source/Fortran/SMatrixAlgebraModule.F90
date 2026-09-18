@@ -8,6 +8,7 @@ MODULE SMatrixAlgebraModule
   USE MatrixMemoryPoolModule, ONLY : MatrixMemoryPool_lr, MatrixMemoryPool_lc, &
        & DestructMatrixMemoryPool, CheckMemoryPoolValidity, SetPoolSparsity, &
        & ConstructMatrixMemoryPool
+  USE ObservabilityModule, ONLY : RecordLocalGemm
   USE SMatrixModule, ONLY: Matrix_lsr, Matrix_lsc, DestructMatrix, CopyMatrix, &
        & TransposeMatrix, ConjugateMatrix, ConstructMatrixFromTripletList, &
        & ConstructEmptyMatrix
