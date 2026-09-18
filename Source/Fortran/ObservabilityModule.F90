@@ -3,6 +3,9 @@
 MODULE ObservabilityModule
   USE DataTypesModule, ONLY : NTREAL, NTLONG, MPINTINTEGER, MPINTLONG, MPINTREAL
   USE NTMPIModule
+#ifdef _OPENMP
+  USE OMP_LIB, ONLY : OMP_GET_MAX_THREADS
+#endif
   IMPLICIT NONE
   PRIVATE
 
@@ -97,7 +100,8 @@ CONTAINS
     INTEGER, INTENT(IN) :: rows_c, columns_c, element_bytes
     LOGICAL, INTENT(IN) :: is_dense
     REAL(NTREAL) :: occupancy_a, occupancy_b
-    INTEGER(NTLONG) :: dense_bytes
+    INTEGER(NTLONG) :: dense_bytes, concurrent_dense_bytes
+    INTEGER :: dense_concurrency
     INTEGER :: ierr
 
     CALL ConfigureObservability()
@@ -112,6 +116,11 @@ CONTAINS
          & (INT(rows_a, NTLONG)*INT(columns_a, NTLONG) + &
          &  INT(rows_b, NTLONG)*INT(columns_b, NTLONG) + &
          &  INT(rows_c, NTLONG)*INT(columns_c, NTLONG))
+    dense_concurrency = 1
+#ifdef _OPENMP
+    dense_concurrency = MAX(1, OMP_GET_MAX_THREADS())
+#endif
+    concurrent_dense_bytes = dense_bytes * INT(dense_concurrency, NTLONG)
 
     IF (enabled) THEN
 !$OMP CRITICAL(NTPOLY_OBSERVABILITY_RECORD)
@@ -123,16 +132,17 @@ CONTAINS
        END IF
        max_operand_occupancy = MAX(max_operand_occupancy, occupancy_a, &
             & occupancy_b)
-       IF (is_dense) max_dense_bytes = MAX(max_dense_bytes, dense_bytes)
+       IF (is_dense) max_dense_bytes = MAX(max_dense_bytes, &
+            & concurrent_dense_bytes)
 !$OMP END CRITICAL(NTPOLY_OBSERVABILITY_RECORD)
     END IF
 
     IF (is_dense .AND. abort_before_dense .AND. &
          & dense_memory_limit_bytes .GT. 0_NTLONG .AND. &
-         & dense_bytes .GT. dense_memory_limit_bytes) THEN
+         & concurrent_dense_bytes .GT. dense_memory_limit_bytes) THEN
        WRITE(*,'(A,I0,A,I0,A,I0)') &
             & "NTPOLY_DENSE_GUARD rank=", active_rank, &
-            & " predicted_bytes=", dense_bytes, &
+            & " predicted_bytes=", concurrent_dense_bytes, &
             & " limit_bytes=", dense_memory_limit_bytes
        CALL MPI_ABORT(active_comm, 86, ierr)
     END IF
