@@ -13,7 +13,9 @@ MODULE ObservabilityModule
   LOGICAL, SAVE :: configured = .FALSE.
   LOGICAL, SAVE :: enabled = .FALSE.
   LOGICAL, SAVE :: abort_before_dense = .FALSE.
+  LOGICAL, SAVE :: abort_before_sparse_workspace = .FALSE.
   INTEGER(NTLONG), SAVE :: dense_memory_limit_bytes = 0_NTLONG
+  INTEGER(NTLONG), SAVE :: sparse_workspace_limit_bytes = 0_NTLONG
   INTEGER, SAVE :: active_comm = MPI_COMM_WORLD
   INTEGER, SAVE :: active_rank = -1
   INTEGER, SAVE :: call_id = 0
@@ -26,6 +28,7 @@ MODULE ObservabilityModule
   REAL(NTREAL), SAVE :: multiply_threshold = 0.0_NTREAL
   REAL(NTREAL), SAVE :: max_operand_occupancy = 0.0_NTREAL
   INTEGER(NTLONG), SAVE :: max_dense_bytes = 0_NTLONG
+  INTEGER(NTLONG), SAVE :: max_sparse_workspace_bytes = 0_NTLONG
   REAL(NTREAL), SAVE :: start_time = 0.0_NTREAL
 
   PUBLIC :: BeginObservedMatrixMultiply
@@ -63,6 +66,21 @@ CONTAINS
        READ(value(1:length), *, IOSTAT=status) dense_memory_limit_bytes
        IF (status .NE. 0) dense_memory_limit_bytes = 0_NTLONG
     END IF
+
+    CALL GET_ENVIRONMENT_VARIABLE("NTPOLY_ABORT_BEFORE_SPARSE_WORKSPACE", &
+         & value, length, status)
+    IF (status .EQ. 0 .AND. length .GT. 0) THEN
+       abort_before_sparse_workspace = (value(1:1) .EQ. "1" .OR. &
+            & value(1:1) .EQ. "T" .OR. value(1:1) .EQ. "t" .OR. &
+            & value(1:1) .EQ. "Y" .OR. value(1:1) .EQ. "y")
+    END IF
+
+    CALL GET_ENVIRONMENT_VARIABLE("NTPOLY_SPARSE_WORKSPACE_LIMIT_BYTES", &
+         & value, length, status)
+    IF (status .EQ. 0 .AND. length .GT. 0) THEN
+       READ(value(1:length), *, IOSTAT=status) sparse_workspace_limit_bytes
+       IF (status .NE. 0) sparse_workspace_limit_bytes = 0_NTLONG
+    END IF
   END SUBROUTINE ConfigureObservability
 
   FUNCTION ObservabilityEnabled() RESULT(is_enabled)
@@ -91,22 +109,27 @@ CONTAINS
     local_sparse_count = 0
     max_operand_occupancy = 0.0_NTREAL
     max_dense_bytes = 0_NTLONG
+    max_sparse_workspace_bytes = 0_NTLONG
     start_time = MPI_WTIME()
   END SUBROUTINE BeginObservedMatrixMultiply
 
   SUBROUTINE RecordLocalGemm(rows_a, columns_a, nnz_a, rows_b, columns_b, &
-       & nnz_b, rows_c, columns_c, is_dense, element_bytes)
+       & nnz_b, rows_c, columns_c, is_dense, element_bytes, &
+       & sparse_pool_element_bytes)
     INTEGER, INTENT(IN) :: rows_a, columns_a, nnz_a
     INTEGER, INTENT(IN) :: rows_b, columns_b, nnz_b
     INTEGER, INTENT(IN) :: rows_c, columns_c, element_bytes
+    INTEGER, INTENT(IN) :: sparse_pool_element_bytes
     LOGICAL, INTENT(IN) :: is_dense
     REAL(NTREAL) :: occupancy_a, occupancy_b
     INTEGER(NTLONG) :: dense_bytes, concurrent_dense_bytes
+    INTEGER(NTLONG) :: sparse_workspace_bytes
     INTEGER :: dense_concurrency
     INTEGER :: ierr
 
     CALL ConfigureObservability()
-    IF (.NOT. enabled .AND. .NOT. abort_before_dense) RETURN
+    IF (.NOT. enabled .AND. .NOT. abort_before_dense .AND. &
+         & .NOT. abort_before_sparse_workspace) RETURN
     occupancy_a = REAL(nnz_a, NTREAL) / &
          & REAL(MAX(1_NTLONG, INT(rows_a, NTLONG)*INT(columns_a, NTLONG)), &
          & NTREAL)
@@ -122,6 +145,9 @@ CONTAINS
     dense_concurrency = MAX(1, OMP_GET_MAX_THREADS())
 #endif
     concurrent_dense_bytes = dense_bytes * INT(dense_concurrency, NTLONG)
+    sparse_workspace_bytes = INT(sparse_pool_element_bytes, NTLONG) * &
+         & INT(rows_c, NTLONG) * INT(columns_c, NTLONG) * &
+         & INT(dense_concurrency, NTLONG)
 
     IF (enabled) THEN
 !$OMP CRITICAL(NTPOLY_OBSERVABILITY_RECORD)
@@ -135,6 +161,8 @@ CONTAINS
             & occupancy_b)
        IF (is_dense) max_dense_bytes = MAX(max_dense_bytes, &
             & concurrent_dense_bytes)
+       IF (.NOT. is_dense) max_sparse_workspace_bytes = &
+            & MAX(max_sparse_workspace_bytes, sparse_workspace_bytes)
 !$OMP END CRITICAL(NTPOLY_OBSERVABILITY_RECORD)
     END IF
 
@@ -150,12 +178,25 @@ CONTAINS
        CALL MPI_ABORT(active_comm, 86, ierr)
 !$OMP END CRITICAL(NTPOLY_DENSE_GUARD_ABORT)
     END IF
+
+    IF (.NOT. is_dense .AND. abort_before_sparse_workspace .AND. &
+         & sparse_workspace_limit_bytes .GT. 0_NTLONG .AND. &
+         & sparse_workspace_bytes .GT. sparse_workspace_limit_bytes) THEN
+!$OMP CRITICAL(NTPOLY_SPARSE_WORKSPACE_GUARD_ABORT)
+       WRITE(*,'(A,I0,A,I0,A,I0)') &
+            & "NTPOLY_SPARSE_WORKSPACE_GUARD rank=", active_rank, &
+            & " predicted_bytes=", sparse_workspace_bytes, &
+            & " limit_bytes=", sparse_workspace_limit_bytes
+       FLUSH(OUTPUT_UNIT)
+       CALL MPI_ABORT(active_comm, 87, ierr)
+!$OMP END CRITICAL(NTPOLY_SPARSE_WORKSPACE_GUARD_ABORT)
+    END IF
   END SUBROUTINE RecordLocalGemm
 
   SUBROUTINE EndObservedMatrixMultiply(output_nnz)
     INTEGER(NTLONG), INTENT(IN) :: output_nnz
     INTEGER :: global_gemm_count, global_dense_count, global_sparse_count
-    INTEGER(NTLONG) :: global_max_dense_bytes
+    INTEGER(NTLONG) :: global_max_dense_bytes, global_max_sparse_workspace_bytes
     REAL(NTREAL) :: global_max_occupancy, elapsed, global_elapsed
     REAL(NTREAL) :: denom
     INTEGER :: ierr
@@ -172,6 +213,9 @@ CONTAINS
          & MPINTREAL, MPI_MAX, active_comm, ierr)
     CALL MPI_Allreduce(max_dense_bytes, global_max_dense_bytes, 1, MPINTLONG, &
          & MPI_MAX, active_comm, ierr)
+    CALL MPI_Allreduce(max_sparse_workspace_bytes, &
+         & global_max_sparse_workspace_bytes, 1, MPINTLONG, MPI_MAX, &
+         & active_comm, ierr)
     CALL MPI_Allreduce(elapsed, global_elapsed, 1, MPINTREAL, MPI_MAX, &
          & active_comm, ierr)
 
@@ -192,6 +236,9 @@ CONTAINS
             & " max_dense_bytes=", global_max_dense_bytes, &
             & " max_operand_occ=", global_max_occupancy, &
             & " walltime_max_s=", global_elapsed
+       WRITE(*,'(A,I0,A,I0)') "NTPOLY_OBS_WORKSPACE call=", call_id, &
+            & " max_sparse_workspace_bytes=", &
+            & global_max_sparse_workspace_bytes
     END IF
   END SUBROUTINE EndObservedMatrixMultiply
 

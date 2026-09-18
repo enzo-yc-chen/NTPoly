@@ -59,7 +59,12 @@
   CALL RecordLocalGemm(matA%rows, matA%columns, SIZE(matA%values), &
        & matB%rows, matB%columns, SIZE(matB%values), mat_c_rows, &
        & mat_c_columns, MIN(sparsity_a, sparsity_b) .GT. sparsity_threshold, &
-       & STORAGE_SIZE(matA%values)/8)
+       & STORAGE_SIZE(matA%values)/8, &
+       & (STORAGE_SIZE(blocked_memory_pool%pruned_list) + &
+       &  STORAGE_SIZE(blocked_memory_pool%value_array) + &
+       &  STORAGE_SIZE(blocked_memory_pool%dirty_array) + &
+       &  STORAGE_SIZE(blocked_memory_pool%hash_index) + &
+       &  STORAGE_SIZE(blocked_memory_pool%inserted_per_bucket))/8)
   IF (MIN(sparsity_a, sparsity_b) .GT. sparsity_threshold) THEN
      CALL DenseBranch(matA, matB, matAB, IsATransposed, IsBTransposed, &
           & alpha, threshold)
