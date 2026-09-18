@@ -1,6 +1,7 @@
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 !> Opt-in MatrixMultiply observability and dense-branch safety guard.
 MODULE ObservabilityModule
+  USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY : OUTPUT_UNIT
   USE DataTypesModule, ONLY : NTREAL, NTLONG, MPINTINTEGER, MPINTLONG, MPINTREAL
   USE NTMPIModule
 #ifdef _OPENMP
@@ -140,11 +141,14 @@ CONTAINS
     IF (is_dense .AND. abort_before_dense .AND. &
          & dense_memory_limit_bytes .GT. 0_NTLONG .AND. &
          & concurrent_dense_bytes .GT. dense_memory_limit_bytes) THEN
+!$OMP CRITICAL(NTPOLY_DENSE_GUARD_ABORT)
        WRITE(*,'(A,I0,A,I0,A,I0)') &
             & "NTPOLY_DENSE_GUARD rank=", active_rank, &
             & " predicted_bytes=", concurrent_dense_bytes, &
             & " limit_bytes=", dense_memory_limit_bytes
+       FLUSH(OUTPUT_UNIT)
        CALL MPI_ABORT(active_comm, 86, ierr)
+!$OMP END CRITICAL(NTPOLY_DENSE_GUARD_ABORT)
     END IF
   END SUBROUTINE RecordLocalGemm
 
